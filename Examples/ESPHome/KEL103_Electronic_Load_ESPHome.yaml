@@ -1,0 +1,271 @@
+esphome:
+  name: electric-load-kel103
+  friendly_name: Electric Load KEL103
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG  # Set logging level to DEBUG to read UART
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+ota:
+  - platform: esphome
+    password: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Electric-Load-Kel103"
+    password: "XXXXXXXXXXXX"
+
+captive_portal:
+
+uart:
+  id: uart_sensor
+  tx_pin: GPIO10
+  rx_pin: GPIO04
+  baud_rate: 9600
+
+  debug:
+    direction: BOTH
+    dummy_receiver: true
+    after:
+      delimiter: "\n"
+    sequence:
+      - lambda: |-
+          std::string received_data = "";
+          for (auto byte : bytes) {
+            received_data += (char)byte;
+          }
+
+          // Trim whitespace (just in case)
+          received_data.erase(0, received_data.find_first_not_of(" \t\n\r"));
+          received_data.erase(received_data.find_last_not_of(" \t\n\r") + 1);
+
+          if (!received_data.empty() && std::isdigit(received_data[0])) {  
+            if (received_data.back() == 'A') {
+                received_data.pop_back();  // Remove 'A'
+                float current_value = atof(received_data.c_str());  
+                id(current_sensor).publish_state(current_value);  
+            } 
+
+            else if (received_data.back() == 'V') {
+                received_data.pop_back();  // Remove 'V'
+                float voltage_value = atof(received_data.c_str());  
+                id(voltage_sensor).publish_state(voltage_value);  
+            } 
+            else if (received_data.find("W") != std::string::npos) {  
+                received_data.erase(received_data.find("W"), 3);  // Remove 'W'
+                float power_value = atof(received_data.c_str());  
+                id(power_sensor).publish_state(power_value);  
+            } 
+          } 
+
+switch:
+  - platform: template
+    name: "On/Off"
+    id: input
+    optimistic: true
+    turn_on_action:
+      - uart.write:
+          id: uart_sensor
+          data: ":INP ON\n"
+    turn_off_action:
+      - uart.write:
+          id: uart_sensor
+          data: ":INP OFF\n"   
+
+select:
+  - platform: template
+    name: "Function"
+    id: function
+    optimistic: true
+    options:
+    - "Constant Current"
+    - "Constant Voltage"
+    - "Constant Power"
+    - "Constant Resistance"
+    initial_option: "Constant Current"
+    on_value:
+      then:
+      - if:
+          condition:
+            lambda: |-
+              return (id(function).active_index() == 0);
+          then:
+            - uart.write:
+                id: uart_sensor
+                data: ":FUNC CC\n"
+            - switch.turn_off:
+                  id: input 
+      - if:
+          condition:
+            lambda: |-
+              return (id(function).active_index() == 1);
+          then:
+            - uart.write:
+                id: uart_sensor
+                data: ":FUNC CV\n"
+            - switch.turn_off:
+                  id: input 
+      - if:
+          condition:
+            lambda: |-
+              return (id(function).active_index() == 2);
+          then:
+            - uart.write:
+                id: uart_sensor
+                data: ":FUNC CW\n"
+            - switch.turn_off:
+                  id: input 
+      - if:
+          condition:
+            lambda: |-
+              return (id(function).active_index() == 3);
+          then:
+            - uart.write:
+                id: uart_sensor
+                data: ":FUNC CR\n"
+            - switch.turn_off:
+                  id: input 
+
+number:
+  - platform: template
+    name: "Set Current"
+    id: set_current
+    icon: "mdi:current-dc"
+    unit_of_measurement: "A"
+    min_value: 0
+    max_value: 30
+    step: 0.0001
+    optimistic: true
+    set_action:
+      - if:
+          condition:
+            lambda: |-
+              return id(function).state != "Constant Current"; 
+          then:
+            - select.set:
+                id: function
+                option: "Constant Current" 
+      - lambda: |-
+          char command[20];
+          snprintf(command, sizeof(command), ":CURR %.4fA\n", x);
+          id(uart_sensor).write_str(command);
+
+  - platform: template
+    name: "Set Voltage"
+    id: set_voltage
+    icon: "mdi:flash"
+    unit_of_measurement: "V"
+    min_value: 0
+    max_value: 120
+    step: 0.0001
+    optimistic: true
+    set_action:
+      - if:
+          condition:
+            lambda: |-
+              return id(function).state != "Constant Voltage"; 
+          then:
+            - select.set:
+                id: function
+                option: "Constant Voltage" 
+      - lambda: |-
+          char command[20];
+          snprintf(command, sizeof(command), ":VOLT %.4fV\n", x);
+          id(uart_sensor).write_str(command);
+
+  - platform: template
+    name: "Set Power"
+    id: set_power
+    icon: "mdi:lightning-bolt"
+    unit_of_measurement: "W"
+    min_value: 0
+    max_value: 300
+    step: 0.0001
+    optimistic: true
+    set_action:
+      - if:
+          condition:
+            lambda: |-
+              return id(function).state != "Constant Power"; 
+          then:
+            - select.set:
+                id: function
+                option: "Constant Power" 
+      - lambda: |-
+          char command[20];
+          snprintf(command, sizeof(command), ":POW %.4fW\n", x);
+          id(uart_sensor).write_str(command);
+
+  - platform: template
+    name: "Set Resistance"
+    id: set_resistance
+    icon: "mdi:resistor"
+    unit_of_measurement: "Ω"
+    min_value: 0
+    max_value: 7500
+    step: 0.0001
+    optimistic: true
+    set_action:
+      - if:
+          condition:
+            lambda: |-
+              return id(function).state != "Constant Resistance"; 
+          then:
+            - select.set:
+                id: function
+                option: "Constant Resistance" 
+      - lambda: |-
+          char command[20];
+          snprintf(command, sizeof(command), ":RES %.4fOHM\n", x);
+          id(uart_sensor).write_str(command);
+
+interval:
+  - interval: 500ms
+    then:
+      - uart.write:
+          id: uart_sensor
+          data: ":MEAS:CURR?\n"
+      - uart.write:
+          id: uart_sensor
+          data: ":MEAS:VOLT?\n"
+      - uart.write:
+          id: uart_sensor
+          data: ":MEAS:POW?\n"
+
+sensor:
+  - platform: template
+    name: "Measured Current"
+    id: current_sensor
+    icon: "mdi:current-dc"
+    unit_of_measurement: "A"
+    accuracy_decimals: 4
+    update_interval: never
+
+  - platform: template
+    name: "Measured Voltage"
+    id: voltage_sensor
+    icon: "mdi:flash"
+    unit_of_measurement: "V"
+    accuracy_decimals: 4
+    update_interval: never
+
+  - platform: template
+    name: "Measured Power"
+    id: power_sensor
+    icon: "mdi:lightning-bolt"
+    unit_of_measurement: "W"
+    accuracy_decimals: 4
+    update_interval: never
