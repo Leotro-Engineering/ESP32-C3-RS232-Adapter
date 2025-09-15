@@ -1,0 +1,128 @@
+esphome:
+  name: power-meter-mpm-1010b
+  friendly_name: Power Meter MPM-1010B
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG  # Set logging level to DEBUG to read UART
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+ota:
+  - platform: esphome
+    password: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Power-Meter-Mpm-1010B"
+    password: "XXXXXXXXXXXX"
+
+captive_portal:
+uart:
+  id: uart_sensor
+  tx_pin: GPIO10
+  rx_pin: GPIO04
+  baud_rate: 9600
+
+  debug:
+    direction: BOTH
+    dummy_receiver: true
+    after:
+      delimiter: "\r\n"
+    sequence:
+      - lambda: |-
+          UARTDebug::log_string(direction, bytes);
+
+          if (bytes.size() != 21) {
+              ESP_LOGW("UART", "Unexpected data length: %d", bytes.size());
+              return;
+          }
+
+          int byte_x = 1;
+          int byte_y = 5;
+
+          while (byte_y <= 21) {
+              std::vector<int> modified_values;
+              int decimal_point = 0;
+
+              for (int index = 0; index < 4; index++) {
+                  uint8_t byte = bytes[byte_x + index];
+                  if (byte >= 0x10 && byte <= 0x1F) {
+                      byte -= 0x10;
+                      decimal_point = index;
+                  }
+                  modified_values.push_back(byte);
+              }
+
+              std::string value_str;
+              for (auto v : modified_values) {
+                  value_str += std::to_string(v);
+              }
+
+              float value = std::stof(value_str) / pow(10, 3 - decimal_point);
+
+              switch (byte_x) {
+                  case 1: id(voltage).publish_state(value); break;
+                  case 5: id(current).publish_state(value); break;
+                  case 9: id(power).publish_state(value); break;
+                  case 13: id(power_factor).publish_state(value); break;
+                  case 17: id(frequency).publish_state(value); break;
+              }
+
+              byte_x += 4;
+              byte_y += 4;
+          }
+
+interval:
+  - interval: 500ms
+    then:
+      - uart.write:
+          id: uart_sensor
+          data: "?"
+
+sensor:
+  - platform: template
+    name: "Voltage"
+    id: voltage
+    icon: "mdi:sine-wave"
+    unit_of_measurement: "V"
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Current"
+    icon: "mdi:current-ac"
+    id: current
+    unit_of_measurement: "A"
+    accuracy_decimals: 3
+
+  - platform: template
+    name: "Power"
+    icon: "mdi:lightning-bolt"
+    id: power
+    unit_of_measurement: "W"
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "Power Factor"
+    id: power_factor
+    accuracy_decimals: 3
+
+  - platform: template
+    name: "Frequency"
+    icon: "mdi:sine-wave"
+    id: frequency
+    unit_of_measurement: "Hz"
+    accuracy_decimals: 2
+
+    
